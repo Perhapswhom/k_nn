@@ -1,0 +1,1803 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>基于 k-NN 的智能穿戴传感器多人动作识别与跌倒监测系统</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background-color: #0b1120;
+      color: #f1f5f9;
+      overflow-x: hidden;
+    }
+    .mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    @keyframes pulse-red {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55); }
+      50% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); }
+    }
+    .fall-alert-card {
+      animation: pulse-red 1.4s infinite;
+      border-color: #ef4444 !important;
+    }
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col bg-slate-950 text-slate-100 selection:bg-indigo-500 selection:text-white">
+
+  <!-- 顶部导航栏 -->
+  <header class="sticky top-0 z-30 border-b border-slate-800/80 bg-slate-900/90 backdrop-blur-md">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+          <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          </svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-base sm:text-lg font-bold tracking-tight text-white">k-NN 智能穿戴多人动作与跌倒监测平台</h1>
+            <span id="connStatusBadge" class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+              <span id="connStatusText">实时通道就绪</span>
+            </span>
+          </div>
+          <p class="text-xs text-slate-400 hidden sm:block">支持多人手机扫码实时上传三轴加速度与角速度 · Pipeline 特征缩放与 k-NN 实时投票分类</p>
+        </div>
+      </div>
+
+      <!-- 视图切换与工具按钮 -->
+      <div class="flex items-center gap-2">
+        <div class="inline-flex rounded-xl bg-slate-800/90 p-1 border border-slate-700/70">
+          <button id="tabDashboardBtn" type="button" class="px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all bg-indigo-600 text-white shadow">
+            监控大屏端
+          </button>
+          <button id="tabClientBtn" type="button" class="px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all text-slate-300 hover:text-white">
+            手机采集端 (扫码后页面)
+          </button>
+        </div>
+
+        <button id="soundToggleBtn" type="button" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 transition" title="跌倒告警提示音开关">
+          <svg id="soundIconOn" class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+          </svg>
+          <svg id="soundIconOff" class="w-5 h-5 text-slate-500 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15zM17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 跌倒紧急告警横幅 -->
+  <div id="fallAlertBanner" class="hidden bg-red-600/95 border-b border-red-400 text-white px-4 py-2.5 shadow-lg">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
+      <div class="flex items-center gap-2.5">
+        <span class="inline-flex p-1.5 rounded-lg bg-white/20 animate-bounce">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+        </span>
+        <div>
+          <span class="font-bold text-sm sm:text-base">异常运动 / 疑似跌倒警报！</span>
+          <span id="fallAlertDetail" class="text-xs sm:text-sm ml-1 text-red-100">检测到测试者出现高冲击加速度峰值与姿态突变，请立即核实！</span>
+        </div>
+      </div>
+      <button id="dismissAlertBtn" type="button" class="px-3 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-xs font-semibold transition">
+        已知晓并复位告警
+      </button>
+    </div>
+  </div>
+
+  <!-- ==================== 视图 1：监控大屏端 (Dashboard) ==================== -->
+  <main id="dashboardView" class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 space-y-6">
+
+    <!-- 顶部折叠区域：左侧扫码接入面板 + 右侧 k-NN 模型参数与全局统计 -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+      <!-- 扫码接入卡片 -->
+      <div class="lg:col-span-5 bg-slate-900/90 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between shadow-xl">
+        <div>
+          <div class="flex items-center justify-between gap-2 mb-3">
+            <div class="flex items-center gap-2">
+              <span class="px-2.5 py-1 rounded-lg bg-indigo-500/20 text-indigo-300 text-xs font-semibold border border-indigo-500/30">步骤 1</span>
+              <h2 class="text-base font-bold text-white">测试者手机扫码接入</h2>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span class="text-xs text-slate-400">房间号:</span>
+              <span id="roomCodeDisplay" class="mono text-xs font-bold px-2 py-0.5 rounded bg-slate-800 text-cyan-400 border border-slate-700">HAR-8821</span>
+              <button id="newRoomBtn" type="button" class="text-xs text-slate-400 hover:text-white px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 transition" title="更换房间号">换号</button>
+            </div>
+          </div>
+
+          <div class="flex flex-col sm:flex-row items-center gap-4 bg-slate-950/70 p-4 rounded-xl border border-slate-800/80">
+            <!-- 二维码容器 -->
+            <div class="flex flex-col items-center shrink-0">
+              <div id="qrcodeContainer" class="p-3 bg-white rounded-xl shadow-md flex items-center justify-center w-[148px] h-[148px] text-center"></div>
+              <span id="qrSubCaption" class="text-[11px] text-slate-400 mt-1.5">微信 / 手机浏览器扫码</span>
+            </div>
+
+            <!-- 扫码说明与自定义部署地址 -->
+            <div class="flex-1 space-y-2.5 text-xs text-slate-300 w-full">
+              <div id="qrSandboxWarning" class="hidden p-2.5 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-200 text-[11px] leading-relaxed">
+                <strong class="text-amber-300">当前为沙盒预览环境：</strong>手机无法直接访问内部预览地址。请先下载本网页并部署到支持 HTTPS 的静态托管（如 Netlify Drop / GitHub Pages），再将生成的网址粘贴到下方即可扫码。
+              </div>
+              <p class="leading-relaxed text-slate-300">
+                任意数量测试者扫码后将进入<strong class="text-white">手机传感器采集页</strong>，通过公共 MQTT 实时通道自动把三轴加速度与陀螺仪数据同步至本大屏。
+              </p>
+              <div>
+                <label for="customUrlInput" class="block text-[11px] text-slate-400 mb-1">二维码指向网址 (部署后的公网 HTTPS 地址)：</label>
+                <div class="flex gap-1.5">
+                  <input id="customUrlInput" type="text" class="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-200 mono focus:outline-none focus:border-indigo-500" placeholder="粘贴部署后的 https://... 网址" />
+                  <button id="copyUrlBtn" type="button" class="shrink-0 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium text-slate-200 transition">
+                    复制
+                  </button>
+                </div>
+              </div>
+              <div class="pt-1 flex flex-wrap gap-2">
+                <button id="quickSwitchTesterBtn" type="button" class="px-2.5 py-1.5 rounded-lg bg-indigo-600/25 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/30 text-xs font-medium transition">
+                  在本机体验扫码后页面 →
+                </button>
+                <button id="downloadHtmlBtn" type="button" class="px-2.5 py-1.5 rounded-lg bg-cyan-600/25 hover:bg-cyan-600/40 text-cyan-300 border border-cyan-500/30 text-xs font-medium transition">
+                  ⬇ 下载单文件 HTML
+                </button>
+                <button id="openDeployGuideBtn" type="button" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-medium transition">
+                  手机扫码部署指引
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 多人模拟控制台 -->
+        <div class="mt-4 pt-3.5 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+          <span class="text-xs text-slate-400">无手机扫码时，可一键生成虚拟测试者验证多人并发：</span>
+          <div class="flex flex-wrap items-center gap-2">
+            <button id="addSimUserBtn" type="button" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow transition flex items-center gap-1">
+              <span>+ 新增 1 名测试者</span>
+            </button>
+            <button id="addBatchSimBtn" type="button" class="px-3 py-1.5 rounded-lg bg-cyan-600/80 hover:bg-cyan-500 text-white text-xs font-semibold transition">
+              + 批量加入 4 人
+            </button>
+            <button id="clearOfflineBtn" type="button" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition border border-slate-700">
+              清空全部
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧：k-NN 模型控制台 & 实时人数统计卡片 -->
+      <div class="lg:col-span-7 flex flex-col justify-between gap-4">
+
+        <!-- 实时统计指标栏 -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4">
+            <div class="text-xs text-slate-400 flex items-center justify-between">
+              <span>当前接入总人数</span>
+              <span class="w-2 h-2 rounded-full bg-indigo-400"></span>
+            </div>
+            <div class="mt-1.5 flex items-baseline gap-1.5">
+              <span id="statTotalUsers" class="text-2xl sm:text-3xl font-bold text-white mono">0</span>
+              <span class="text-xs text-slate-400">人实时在线</span>
+            </div>
+            <div id="statDeviceBreakdown" class="mt-1 text-[11px] text-slate-400">真机 0 · 模拟 0</div>
+          </div>
+
+          <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4">
+            <div class="text-xs text-slate-400 flex items-center justify-between">
+              <span>动态活动人数</span>
+              <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            </div>
+            <div class="mt-1.5 flex items-baseline gap-1.5">
+              <span id="statDynamicUsers" class="text-2xl sm:text-3xl font-bold text-emerald-400 mono">0</span>
+              <span class="text-xs text-slate-400">行走 / 上下楼</span>
+            </div>
+            <div class="mt-1 text-[11px] text-slate-400">高频加速度周期波动</div>
+          </div>
+
+          <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4">
+            <div class="text-xs text-slate-400 flex items-center justify-between">
+              <span>静态姿态人数</span>
+              <span class="w-2 h-2 rounded-full bg-sky-400"></span>
+            </div>
+            <div class="mt-1.5 flex items-baseline gap-1.5">
+              <span id="statStaticUsers" class="text-2xl sm:text-3xl font-bold text-sky-400 mono">0</span>
+              <span class="text-xs text-slate-400">坐 / 站 / 躺</span>
+            </div>
+            <div class="mt-1 text-[11px] text-slate-400">依靠重力倾角区分</div>
+          </div>
+
+          <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4">
+            <div class="text-xs text-slate-400 flex items-center justify-between">
+              <span>异常/跌倒预警</span>
+              <span class="w-2 h-2 rounded-full bg-red-500"></span>
+            </div>
+            <div class="mt-1.5 flex items-baseline gap-1.5">
+              <span id="statFallUsers" class="text-2xl sm:text-3xl font-bold text-red-400 mono">0</span>
+              <span class="text-xs text-slate-400">高危冲击状态</span>
+            </div>
+            <div class="mt-1 text-[11px] text-slate-400">优先控制漏检(假阴性)</div>
+          </div>
+        </div>
+
+        <!-- k-NN Pipeline 超参数实时调节面板（呼应报告第4、5章） -->
+        <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 flex-1 flex flex-col justify-between">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <div class="flex items-center gap-2">
+              <span class="px-2.5 py-1 rounded-lg bg-cyan-500/20 text-cyan-300 text-xs font-semibold border border-cyan-500/30">k-NN 分类流水线配置</span>
+              <h3 class="text-sm font-bold text-white">特征缩放 (Feature Scaling) 与近邻数 k 实时调优</h3>
+            </div>
+            <span class="text-xs text-slate-400">基于 UCI HAR 6类日常动作 + 跌倒异常样本库</span>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <!-- 特征缩放选择 -->
+            <div class="bg-slate-950/60 p-3.5 rounded-xl border border-slate-800">
+              <label class="block text-xs font-semibold text-slate-300 mb-2">1. 特征缩放方法 (消除欧氏距离量纲偏置)</label>
+              <div class="grid grid-cols-3 gap-1.5" id="scalingSelector">
+                <button type="button" data-scale="zscore" class="scale-btn px-2.5 py-2 rounded-lg text-xs font-medium bg-indigo-600 text-white border border-indigo-500 transition">
+                  Z-score 标准化
+                </button>
+                <button type="button" data-scale="minmax" class="scale-btn px-2.5 py-2 rounded-lg text-xs font-medium bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition">
+                  Min-Max 归一化
+                </button>
+                <button type="button" data-scale="none" class="scale-btn px-2.5 py-2 rounded-lg text-xs font-medium bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition">
+                  不做缩放 (基线)
+                </button>
+              </div>
+              <p id="scalingHint" class="mt-2 text-[11px] text-slate-400 leading-normal">
+                当前：X_new = (X - μ) / σ，对异常离群峰值相对稳健，各维特征均等参与欧氏距离计算。
+              </p>
+            </div>
+
+            <!-- k值选择 -->
+            <div class="bg-slate-950/60 p-3.5 rounded-xl border border-slate-800">
+              <div class="flex items-center justify-between mb-2">
+                <label class="text-xs font-semibold text-slate-300">2. 近邻数量 k 值 (敏感性分析)</label>
+                <span id="kValueBadge" class="mono text-xs font-bold text-cyan-400">k = 5</span>
+              </div>
+              <div class="grid grid-cols-7 gap-1" id="kSelector">
+                <button type="button" data-k="1" class="k-btn py-1.5 rounded-lg text-xs mono bg-slate-800 text-slate-300 border border-slate-700 hover:text-white">1</button>
+                <button type="button" data-k="3" class="k-btn py-1.5 rounded-lg text-xs mono bg-slate-800 text-slate-300 border border-slate-700 hover:text-white">3</button>
+                <button type="button" data-k="5" class="k-btn py-1.5 rounded-lg text-xs mono bg-indigo-600 text-white border border-indigo-500 font-bold">5</button>
+                <button type="button" data-k="11" class="k-btn py-1.5 rounded-lg text-xs mono bg-slate-800 text-slate-300 border border-slate-700 hover:text-white">11</button>
+                <button type="button" data-k="15" class="k-btn py-1.5 rounded-lg text-xs mono bg-slate-800 text-slate-300 border border-slate-700 hover:text-white">15</button>
+                <button type="button" data-k="21" class="k-btn py-1.5 rounded-lg text-xs mono bg-slate-800 text-slate-300 border border-slate-700 hover:text-white">21</button>
+                <button type="button" data-k="27" class="k-btn py-1.5 rounded-lg text-xs mono bg-slate-800 text-slate-300 border border-slate-700 hover:text-white">27</button>
+              </div>
+              <p id="kHint" class="mt-2 text-[11px] text-slate-400 leading-normal">
+                当前：k=5 兼顾局部动作特征判别与抗噪平滑能力，避免 k=1 过拟合与大 k 值欠拟合。
+              </p>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- 多人动作类别分布条 -->
+    <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <h3 class="text-sm font-bold text-white flex items-center gap-2">
+          <span>全体测试者动作实时分布汇总</span>
+          <span id="participantCountLabel" class="text-xs font-normal text-slate-400">(共 0 人)</span>
+        </h3>
+        <div class="flex flex-wrap items-center gap-3 text-xs">
+          <span class="inline-flex items-center gap-1.5 text-emerald-400"><span class="w-2.5 h-2.5 rounded-sm bg-emerald-500"></span>行走: <b id="countWALKING" class="mono">0</b></span>
+          <span class="inline-flex items-center gap-1.5 text-teal-400"><span class="w-2.5 h-2.5 rounded-sm bg-teal-500"></span>上楼: <b id="countUPSTAIRS" class="mono">0</b></span>
+          <span class="inline-flex items-center gap-1.5 text-amber-400"><span class="w-2.5 h-2.5 rounded-sm bg-amber-500"></span>下楼: <b id="countDOWNSTAIRS" class="mono">0</b></span>
+          <span class="inline-flex items-center gap-1.5 text-sky-400"><span class="w-2.5 h-2.5 rounded-sm bg-sky-500"></span>静坐: <b id="countSITTING" class="mono">0</b></span>
+          <span class="inline-flex items-center gap-1.5 text-indigo-400"><span class="w-2.5 h-2.5 rounded-sm bg-indigo-500"></span>站立: <b id="countSTANDING" class="mono">0</b></span>
+          <span class="inline-flex items-center gap-1.5 text-purple-400"><span class="w-2.5 h-2.5 rounded-sm bg-purple-500"></span>平躺: <b id="countLAYING" class="mono">0</b></span>
+          <span class="inline-flex items-center gap-1.5 text-red-400 font-semibold"><span class="w-2.5 h-2.5 rounded-sm bg-red-500"></span>疑似跌倒: <b id="countFALL" class="mono">0</b></span>
+        </div>
+      </div>
+      <!-- 进度条可视化 -->
+      <div id="distributionBar" class="w-full h-3 bg-slate-800 rounded-full overflow-hidden flex">
+        <div class="h-full bg-slate-700 w-full transition-all duration-300"></div>
+      </div>
+    </div>
+
+    <!-- 动态多人监控卡片矩阵（多少个人就显示多少个人的数据） -->
+    <section>
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+        <div>
+          <h2 class="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+            <span>测试者实时传感器与动作判别矩阵</span>
+            <span id="matrixBadgeCount" class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">0 人在线</span>
+          </h2>
+          <p class="text-xs text-slate-400 mt-0.5">每张卡片独立展示对应测试者的三轴加速度 (m/s²)、三轴陀螺仪 (°/s)、实时波形、特征向量及 k-NN 投票分布</p>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <select id="filterActivitySelect" class="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
+            <option value="ALL">显示全部状态测试者</option>
+            <option value="FALL">仅看疑似跌倒告警</option>
+            <option value="DYNAMIC">仅看动态活动 (行走/上下楼)</option>
+            <option value="STATIC">仅看静态姿态 (坐/站/躺)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- 空状态提示 -->
+      <div id="emptyParticipantsState" class="hidden bg-slate-900/60 border border-dashed border-slate-700 rounded-2xl p-10 text-center space-y-3">
+        <div class="w-12 h-12 rounded-2xl bg-slate-800 mx-auto flex items-center justify-center text-slate-400">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+          </svg>
+        </div>
+        <h3 class="text-base font-bold text-white">当前暂无测试者接入</h3>
+        <p class="text-xs text-slate-400 max-w-md mx-auto">
+          请使用手机扫描左上方二维码接入真机传感器，或点击下方按钮一键生成多名虚拟测试者观察多人并发监测效果。
+        </p>
+        <div class="pt-2 flex justify-center gap-3">
+          <button id="emptyAddSimBtn" type="button" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition">
+            + 立即生成 3 名测试者
+          </button>
+          <button id="emptyOpenClientBtn" type="button" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition">
+            打开本机传感器采集端
+          </button>
+        </div>
+      </div>
+
+      <!-- 多人卡片网格 -->
+      <div id="participantsGrid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5"></div>
+    </section>
+
+  </main>
+
+  <!-- ==================== 视图 2：手机传感器采集端 (Tester Mobile View) ==================== -->
+  <main id="clientView" class="hidden flex-1 max-w-lg w-full mx-auto px-4 py-6 space-y-5">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div>
+          <span class="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 text-[11px] font-semibold">测试者终端 (移动端传感器采集)</span>
+          <h2 class="text-lg font-bold text-white mt-1">实时惯性传感器上报</h2>
+        </div>
+        <button id="backToDashboardBtn" type="button" class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 border border-slate-700">
+          返回大屏
+        </button>
+      </div>
+
+      <!-- 身份与房间配置 -->
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label for="clientNameInput" class="block text-xs text-slate-400 mb-1">您的测试姓名 / 编号</label>
+          <input id="clientNameInput" type="text" class="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white focus:outline-none focus:border-indigo-500" value="测试员 #01" />
+        </div>
+        <div>
+          <label for="clientRoomInput" class="block text-xs text-slate-400 mb-1">同步房间号 (与大屏一致)</label>
+          <input id="clientRoomInput" type="text" class="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-cyan-400 mono focus:outline-none focus:border-indigo-500" value="HAR-8821" />
+        </div>
+      </div>
+
+      <!-- 传感器授权与启动按钮 -->
+      <div class="p-4 rounded-xl bg-slate-950/90 border border-slate-800 space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-slate-300">传感器采集状态：</span>
+          <span id="clientSensorStatus" class="text-xs font-semibold text-amber-400">待启动 (支持手机真机陀螺仪/加速度计)</span>
+        </div>
+
+        <button id="startHardwareSensorBtn" type="button" class="w-full py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-bold text-sm shadow-lg shadow-indigo-600/30 transition">
+          点击授权并开启手机实时传感器上报
+        </button>
+
+        <p class="text-[11px] text-slate-400 leading-relaxed">
+          提示：若您在电脑浏览器或未开启 HTTPS 的环境下打开，系统会自动启用下方的<strong class="text-slate-200">交互式动作模拟传感器</strong>，同样会实时同步到大屏。
+        </p>
+      </div>
+
+      <!-- 当前本机判别结果大卡片 -->
+      <div id="clientPredictionBox" class="p-5 rounded-2xl bg-gradient-to-br from-slate-800/90 to-slate-900 border border-slate-700 text-center space-y-2">
+        <div class="text-xs text-slate-400">k-NN 模型实时识别您的当前动作</div>
+        <div id="clientCurrentActivity" class="text-3xl font-extrabold text-emerald-400 tracking-wide">站立 (STANDING)</div>
+        <div class="flex items-center justify-center gap-3 text-xs text-slate-300 pt-1">
+          <span>投票置信度: <b id="clientConfidence" class="mono text-white">95%</b></span>
+          <span>·</span>
+          <span>合加速度 SVM: <b id="clientSvmValue" class="mono text-cyan-400">9.81 m/s²</b></span>
+          <span>·</span>
+          <span>倾角: <b id="clientTiltValue" class="mono text-indigo-300">12°</b></span>
+        </div>
+      </div>
+
+      <!-- 实时传感器三轴读数 -->
+      <div class="grid grid-cols-2 gap-3 text-xs">
+        <div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+          <div class="font-semibold text-slate-300 flex items-center justify-between">
+            <span>三轴加速度 (m/s²)</span>
+            <span class="text-[10px] text-indigo-400 mono">50Hz</span>
+          </div>
+          <div class="flex justify-between mono"><span>Acc X:</span><span id="clientAccX" class="text-white">0.12</span></div>
+          <div class="flex justify-between mono"><span>Acc Y:</span><span id="clientAccY" class="text-white">9.75</span></div>
+          <div class="flex justify-between mono"><span>Acc Z:</span><span id="clientAccZ" class="text-white">0.84</span></div>
+        </div>
+        <div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+          <div class="font-semibold text-slate-300 flex items-center justify-between">
+            <span>三轴角速度 (°/s)</span>
+            <span class="text-[10px] text-cyan-400 mono">Gyro</span>
+          </div>
+          <div class="flex justify-between mono"><span>Gyr X:</span><span id="clientGyrX" class="text-white">1.20</span></div>
+          <div class="flex justify-between mono"><span>Gyr Y:</span><span id="clientGyrY" class="text-white">-0.85</span></div>
+          <div class="flex justify-between mono"><span>Gyr Z:</span><span id="clientGyrZ" class="text-white">0.40</span></div>
+        </div>
+      </div>
+
+      <!-- 手动切换测试动作（方便无陀螺仪或快速演示各种状态） -->
+      <div class="pt-2 border-t border-slate-800 space-y-2.5">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold text-slate-300">动作状态模拟触发器 (实时发送至大屏)</span>
+          <span class="text-[11px] text-slate-400">可随时点击切换动作</span>
+        </div>
+        <div class="grid grid-cols-3 gap-2" id="clientPresetButtons">
+          <button type="button" data-act="WALKING" class="client-act-btn py-2 px-2.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-emerald-600/30 text-slate-200 border border-slate-700 transition">🚶 行走</button>
+          <button type="button" data-act="UPSTAIRS" class="client-act-btn py-2 px-2.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-teal-600/30 text-slate-200 border border-slate-700 transition">🧗 上楼</button>
+          <button type="button" data-act="DOWNSTAIRS" class="client-act-btn py-2 px-2.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-amber-600/30 text-slate-200 border border-slate-700 transition">📉 下楼</button>
+          <button type="button" data-act="SITTING" class="client-act-btn py-2 px-2.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-sky-600/30 text-slate-200 border border-slate-700 transition">🪑 静坐</button>
+          <button type="button" data-act="STANDING" class="client-act-btn py-2 px-2.5 rounded-xl text-xs font-semibold bg-indigo-600 text-white border border-indigo-500 transition">🧍 站立</button>
+          <button type="button" data-act="LAYING" class="client-act-btn py-2 px-2.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-purple-600/30 text-slate-200 border border-slate-700 transition">🛌 平躺</button>
+        </div>
+        <button id="clientTriggerFallBtn" type="button" class="w-full py-2.5 rounded-xl bg-red-600/25 hover:bg-red-600 text-red-300 hover:text-white border border-red-500/40 text-xs font-bold transition">
+          ⚠️ 模拟突发跌倒冲击 (测试高加速度峰值与假阴性防护)
+        </button>
+      </div>
+    </div>
+  </main>
+
+  <!-- ==================== 模态框：单人 k-NN 投票详情与特征剖析 ==================== -->
+  <div id="detailModal" class="fixed inset-0 z-50 hidden bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-5 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div>
+          <h3 id="modalUserName" class="text-base font-bold text-white">测试者详情与 k-NN 距离剖析</h3>
+          <p id="modalUserSub" class="text-xs text-slate-400">5维核心时频特征缩放前后对比与近邻投票明细</p>
+        </div>
+        <button id="closeModalBtn" type="button" class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">
+          ✕
+        </button>
+      </div>
+
+      <div id="modalBodyContent" class="space-y-3 text-xs"></div>
+
+      <div class="pt-2 flex justify-end">
+        <button id="closeModalFooterBtn" type="button" class="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">
+          关闭详情
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 模态框：手机扫码部署指引 ==================== -->
+  <div id="deployGuideModal" class="fixed inset-0 z-50 hidden bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-5 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div>
+          <h3 class="text-base font-bold text-white">如何让测试者手机正常扫码接入？</h3>
+          <p class="text-xs text-slate-400">解决“网络出错，无法显示该页面”及手机传感器 HTTPS 权限要求</p>
+        </div>
+        <button id="closeDeployGuideBtn" type="button" class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">✕</button>
+      </div>
+      <div class="space-y-3 text-xs text-slate-300 leading-relaxed">
+        <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+          <div class="font-bold text-cyan-400">为什么之前扫码会提示“网络出错”？</div>
+          <p>当前页面运行在受限的沙盒预览窗口中，没有公网域名。手机扫码需要访问一个真实可达的 <strong class="text-white">HTTPS 公网网址</strong>（iOS 和主流安卓浏览器也要求 HTTPS 才能读取陀螺仪与加速度计）。</p>
+        </div>
+        <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+          <div class="font-bold text-emerald-400">最快 2 步上线方案（约 30 秒，免费无需后端）：</div>
+          <ol class="list-decimal list-inside space-y-1.5 text-slate-300">
+            <li>点击面板中的 <strong class="text-white">“⬇ 下载单文件 HTML”</strong> 保存 <code class="mono text-cyan-300">har_knn_monitor.html</code>（或改名为 <code class="mono text-cyan-300">index.html</code> 放入一个空文件夹）。</li>
+            <li>将该文件部署到任意免费静态托管服务：
+              <ul class="list-disc list-inside pl-4 mt-1 text-slate-400 space-y-0.5">
+                <li><strong class="text-slate-200">Netlify Drop</strong>：打开 <code class="mono text-cyan-300">app.netlify.com/drop</code>，把文件夹拖进去立即获得 <code class="mono">https://xxx.netlify.app</code>。</li>
+                <li><strong class="text-slate-200">GitHub Pages / Vercel / Cloudflare Pages</strong>：上传后即可获得永久 HTTPS 链接。</li>
+              </ul>
+            </li>
+            <li>直接用电脑打开那个 HTTPS 网址作为大屏（二维码会自动指向该网址），测试者手机扫码即可立即接入并实时同步数据！</li>
+          </ol>
+        </div>
+      </div>
+      <div class="pt-1 flex justify-end">
+        <button id="closeDeployGuideFooterBtn" type="button" class="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">
+          我知道了
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 底部状态栏 -->
+  <footer class="border-t border-slate-900 bg-slate-950 py-3 px-4 text-center text-[11px] text-slate-500">
+    基于 UCI HAR 人体活动识别数据集 (50Hz 采样 · 2.56s 滑动窗口) 与 k-NN 欧氏距离分类器构建 · 支持多人扫码实时同步与异常跌倒预警
+  </footer>
+
+  <script>
+    (function () {
+      // ==================== 1. 活动类别定义（对应报告6类日常活动 + 异常跌倒） ====================
+      const ACTIVITY_META = {
+        WALKING: {
+          label: '行走',
+          en: 'WALKING',
+          icon: '🚶',
+          category: 'DYNAMIC',
+          badgeCls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+          barCls: 'bg-emerald-500',
+          colorHex: '#10b981'
+        },
+        UPSTAIRS: {
+          label: '上楼',
+          en: 'WALKING_UPSTAIRS',
+          icon: '🧗',
+          category: 'DYNAMIC',
+          badgeCls: 'bg-teal-500/20 text-teal-300 border-teal-500/40',
+          barCls: 'bg-teal-500',
+          colorHex: '#14b8a6'
+        },
+        DOWNSTAIRS: {
+          label: '下楼',
+          en: 'WALKING_DOWNSTAIRS',
+          icon: '📉',
+          category: 'DYNAMIC',
+          badgeCls: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+          barCls: 'bg-amber-500',
+          colorHex: '#f59e0b'
+        },
+        SITTING: {
+          label: '静坐',
+          en: 'SITTING',
+          icon: '🪑',
+          category: 'STATIC',
+          badgeCls: 'bg-sky-500/20 text-sky-300 border-sky-500/40',
+          barCls: 'bg-sky-500',
+          colorHex: '#0ea5e9'
+        },
+        STANDING: {
+          label: '站立',
+          en: 'STANDING',
+          icon: '🧍',
+          category: 'STATIC',
+          badgeCls: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40',
+          barCls: 'bg-indigo-500',
+          colorHex: '#6366f1'
+        },
+        LAYING: {
+          label: '平躺',
+          en: 'LAYING',
+          icon: '🛌',
+          category: 'STATIC',
+          badgeCls: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+          barCls: 'bg-purple-500',
+          colorHex: '#a855f7'
+        },
+        FALL: {
+          label: '疑似跌倒/异常冲击',
+          en: 'FALL_ALERT',
+          icon: '⚠️',
+          category: 'FALL',
+          badgeCls: 'bg-red-500/25 text-red-200 border-red-500',
+          barCls: 'bg-red-500',
+          colorHex: '#ef4444'
+        }
+      };
+
+      // ==================== 2. 构建 UCI HAR 特征空间训练样本库与 k-NN 分类器 ====================
+      // 5个核心物理特征：
+      // f0: acc_svm_mean (合加速度均值 m/s², 量纲约 9.5~24)
+      // f1: acc_std (动态加速度标准差 m/s², 量纲约 0.05~8.5)
+      // f2: tilt_angle (重力倾角 °, 量纲约 0~90，故意保持较大数值范围以体现不做缩放时的量纲淹没现象)
+      // f3: gyro_energy (陀螺仪角速度能量 (°/s)², 量纲约 1~1800)
+      // f4: jerk_peak (加加速度冲击峰值 m/s³, 量纲约 0.2~35)
+      const FEATURE_NAMES = [
+        '合加速度均值 (m/s²)',
+        '加速度标准差 σ_a',
+        '身体重力倾角 (°)',
+        '角速度能量 (Gyro²)',
+        '冲击加加速度峰值 (Jerk)'
+      ];
+
+      const PROTOTYPE_CENTERS = {
+        STANDING:   [9.80, 0.14,  8.0,   4.0,  0.4],
+        SITTING:    [9.78, 0.18, 34.0,   6.5,  0.6],
+        LAYING:     [9.82, 0.12, 82.0,   3.0,  0.3],
+        WALKING:    [11.4, 2.45, 16.0, 260.0,  6.5],
+        UPSTAIRS:   [12.3, 3.10, 26.0, 420.0,  9.2],
+        DOWNSTAIRS: [13.5, 4.15, 20.0, 560.0, 13.8],
+        FALL:       [22.8, 7.90, 74.0, 1450.0, 29.5]
+      };
+
+      const PROTOTYPE_SPREAD = {
+        STANDING:   [0.25, 0.06, 4.0,   3.0,  0.2],
+        SITTING:    [0.28, 0.08, 6.0,   4.0,  0.25],
+        LAYING:     [0.25, 0.05, 5.0,   2.5,  0.2],
+        WALKING:    [0.70, 0.38, 4.5,  45.0,  1.2],
+        UPSTAIRS:   [0.85, 0.45, 5.0,  65.0,  1.6],
+        DOWNSTAIRS: [1.05, 0.55, 5.0,  85.0,  2.1],
+        FALL:       [2.40, 1.10, 9.0, 210.0,  4.0]
+      };
+
+      // 生成确定性伪随机训练样本集（共 210 条样本，每类 30 条）
+      const trainingSet = [];
+      let seed = 42;
+      function seededRandom() {
+        seed = (seed * 1664525 + 1013904223) % 4294967296;
+        return seed / 4294967296;
+      }
+      function gaussianNoise() {
+        const u1 = Math.max(1e-6, seededRandom());
+        const u2 = seededRandom();
+        return Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+      }
+
+      Object.keys(PROTOTYPE_CENTERS).forEach((label) => {
+        const center = PROTOTYPE_CENTERS[label];
+        const spread = PROTOTYPE_SPREAD[label];
+        for (let i = 0; i < 30; i++) {
+          const features = center.map((c, idx) => {
+            const val = c + gaussianNoise() * spread[idx];
+            return Math.max(0.01, val);
+          });
+          trainingSet.push({ features, label });
+        }
+      });
+
+      // 计算训练集上的 Min-Max 与 Z-score 统计参数（严格遵循 Pipeline 仅从训练集拟合参数）
+      const numFeatures = 5;
+      const scalerParams = {
+        min: new Array(numFeatures).fill(Infinity),
+        max: new Array(numFeatures).fill(-Infinity),
+        mean: new Array(numFeatures).fill(0),
+        std: new Array(numFeatures).fill(1)
+      };
+
+      trainingSet.forEach((row) => {
+        row.features.forEach((v, idx) => {
+          if (v < scalerParams.min[idx]) scalerParams.min[idx] = v;
+          if (v > scalerParams.max[idx]) scalerParams.max[idx] = v;
+          scalerParams.mean[idx] += v / trainingSet.length;
+        });
+      });
+
+      trainingSet.forEach((row) => {
+        row.features.forEach((v, idx) => {
+          scalerParams.std[idx] += Math.pow(v - scalerParams.mean[idx], 2) / trainingSet.length;
+        });
+      });
+      scalerParams.std = scalerParams.std.map((variance) => Math.sqrt(variance) || 1);
+
+      function scaleFeatureVector(vec, mode) {
+        if (mode === 'minmax') {
+          return vec.map((v, idx) => {
+            const denom = scalerParams.max[idx] - scalerParams.min[idx] || 1;
+            return (v - scalerParams.min[idx]) / denom;
+          });
+        }
+        if (mode === 'zscore') {
+          return vec.map((v, idx) => (v - scalerParams.mean[idx]) / scalerParams.std[idx]);
+        }
+        // 'none': 不做缩放（此時 gyro_energy [0~1800] 和 tilt_angle [0~90] 会主导欧氏距离，淹没 acc_std [0.1~8]）
+        return vec.slice();
+      }
+
+      // 执行 k-NN 分类，返回预测类别、置信度、k个最近邻投票详情
+      function classifyKNN(rawFeatures, kValue, scaleMode) {
+        const scaledInput = scaleFeatureVector(rawFeatures, scaleMode);
+        const distances = trainingSet.map((sample) => {
+          const scaledSample = scaleFeatureVector(sample.features, scaleMode);
+          let sumSq = 0;
+          for (let i = 0; i < numFeatures; i++) {
+            const diff = scaledInput[i] - scaledSample[i];
+            sumSq += diff * diff;
+          }
+          return {
+            label: sample.label,
+            dist: Math.sqrt(sumSq)
+          };
+        });
+
+        distances.sort((a, b) => a.dist - b.dist);
+        const kNeighbors = distances.slice(0, kValue);
+
+        const votes = {};
+        kNeighbors.forEach((n) => {
+          votes[n.label] = (votes[n.label] || 0) + 1;
+        });
+
+        // 结合健康监护场景下优先控制漏检（假阴性）：若 FALL 票数占比 >= 35%，优先触发 FALL 预警
+        let bestLabel = kNeighbors[0].label;
+        let maxCount = 0;
+        Object.keys(votes).forEach((lbl) => {
+          if (votes[lbl] > maxCount) {
+            maxCount = votes[lbl];
+            bestLabel = lbl;
+          }
+        });
+        if (votes.FALL && votes.FALL / kValue >= 0.35) {
+          bestLabel = 'FALL';
+          maxCount = votes.FALL;
+        }
+
+        const confidence = Math.round((maxCount / kValue) * 100);
+        return {
+          predicted: bestLabel,
+          confidence,
+          votes,
+          nearestDist: kNeighbors[0].dist,
+          scaledInput
+        };
+      }
+
+      // ==================== 3. 全局状态管理 ====================
+      const urlParams = new URLSearchParams(window.location.search);
+      const initialRoom = urlParams.get('room') || 'HAR-' + Math.floor(1000 + Math.random() * 9000);
+      const initialMode = urlParams.get('mode') === 'tester' ? 'client' : 'dashboard';
+
+      const state = {
+        room: initialRoom,
+        viewMode: initialMode,
+        scaleMode: 'zscore',
+        kValue: 5,
+        filterCategory: 'ALL',
+        soundEnabled: true,
+        participants: new Map(), // id -> participant object
+        selectedModalUserId: null,
+        client: {
+          id: 'mobile-' + Math.random().toString(36).substring(2, 7),
+          name: '扫码测试员 #' + Math.floor(10 + Math.random() * 89),
+          hardwareActive: false,
+          simTargetActivity: 'STANDING',
+          acc: { x: 0.15, y: 9.76, z: 0.82 },
+          gyr: { x: 1.1, y: -0.6, z: 0.3 },
+          tilt: 9.0,
+          svmHistory: [9.8, 9.81, 9.79, 9.82, 9.80]
+        }
+      };
+
+      // ==================== 4. Web Audio API 告警声音合成 ====================
+      let audioCtx = null;
+      function playFallAlertBeep() {
+        if (!state.soundEnabled) return;
+        try {
+          if (!audioCtx) {
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            if (AudioContextClass) audioCtx = new AudioContextClass();
+          }
+          if (!audioCtx) return;
+          if (audioCtx.state === 'suspended') audioCtx.resume();
+
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+          osc.frequency.setValueAtTime(660, audioCtx.currentTime + 0.12);
+          gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.28);
+
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.29);
+        } catch (err) {
+          // 忽略浏览器自动播放限制
+        }
+      }
+
+      // ==================== 5. 二维码生成与链接同步 ====================
+      let qrInstance = null;
+      function isReachablePublicUrl(urlStr) {
+        if (!urlStr || !/^https?:\/\//i.test(urlStr)) return false;
+        const lower = urlStr.toLowerCase();
+        const blockedHosts = ['localhost', '127.0.0.1', '0.0.0.0', 'googleusercontent.com', 'usercontent.goog', 'har-knn-monitor.demo'];
+        return !blockedHosts.some((h) => lower.includes(h));
+      }
+
+      function getTesterShareUrl() {
+        const customInput = document.getElementById('customUrlInput');
+        let baseUrl = customInput && customInput.value.trim() ? customInput.value.trim() : '';
+        if (!baseUrl) {
+          const href = window.location.href.split('?')[0];
+          if (isReachablePublicUrl(href)) {
+            baseUrl = href;
+            if (customInput) customInput.value = baseUrl;
+          }
+        }
+        if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) {
+          return '';
+        }
+        const cleanBase = baseUrl.split('?')[0];
+        return cleanBase + '?mode=tester&room=' + encodeURIComponent(state.room);
+      }
+
+      function renderQRCode() {
+        const container = document.getElementById('qrcodeContainer');
+        const warnEl = document.getElementById('qrSandboxWarning');
+        const subCapEl = document.getElementById('qrSubCaption');
+        if (!container) return;
+        const targetUrl = getTesterShareUrl();
+        container.innerHTML = '';
+
+        if (!targetUrl) {
+          if (warnEl) warnEl.classList.remove('hidden');
+          if (subCapEl) subCapEl.textContent = '待填入公网部署网址';
+          container.innerHTML = '<div class="text-[11px] leading-snug text-slate-700 font-medium px-1">请先部署后粘贴<br/><span class="text-indigo-600 font-bold">https://</span> 网址<br/>再生成手机二维码</div>';
+        } else {
+          if (warnEl) warnEl.classList.toggle('hidden', isReachablePublicUrl(targetUrl));
+          if (subCapEl) subCapEl.textContent = '微信 / 手机浏览器扫码';
+          if (typeof QRCode !== 'undefined') {
+            qrInstance = new QRCode(container, {
+              text: targetUrl,
+              width: 132,
+              height: 132,
+              colorDark: '#0f172a',
+              colorLight: '#ffffff',
+              correctLevel: QRCode.CorrectLevel.M
+            });
+          } else {
+            container.innerHTML = '<div class="text-xs text-slate-800 text-center p-2">二维码组件加载中</div>';
+          }
+        }
+
+        document.getElementById('roomCodeDisplay').textContent = state.room;
+        const clientRoomInput = document.getElementById('clientRoomInput');
+        if (clientRoomInput && document.activeElement !== clientRoomInput) {
+          clientRoomInput.value = state.room;
+        }
+      }
+
+      // ==================== 6. 跨设备/跨标签实时通信 (MQTT over WebSockets + BroadcastChannel) ====================
+      let mqttClient = null;
+      let broadcastChannel = null;
+
+      function setupRealtimeChannels() {
+        // 1) 同浏览器跨标签页实时同步
+        if ('BroadcastChannel' in window) {
+          broadcastChannel = new BroadcastChannel('har_knn_realtime_channel');
+          broadcastChannel.onmessage = (ev) => {
+            if (ev.data && ev.data.room === state.room) {
+              handleIncomingSensorPacket(ev.data);
+            }
+          };
+        }
+
+        // 2) 跨设备手机扫码 MQTT over WebSocket 同步
+        if (typeof mqtt !== 'undefined') {
+          try {
+            mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
+              clientId: 'har_knn_' + Math.random().toString(16).substring(2, 10),
+              clean: true,
+              connectTimeout: 5000,
+              reconnectPeriod: 4000
+            });
+
+            mqttClient.on('connect', () => {
+              const badge = document.getElementById('connStatusText');
+              if (badge) badge.textContent = '云端跨设备通道已连接';
+              subscribeCurrentRoom();
+            });
+
+            mqttClient.on('message', (topic, message) => {
+              try {
+                const payload = JSON.parse(message.toString());
+                if (payload && payload.room === state.room) {
+                  handleIncomingSensorPacket(payload);
+                }
+              } catch (e) {
+                // ignore malformed json
+              }
+            });
+
+            mqttClient.on('error', () => {
+              const badge = document.getElementById('connStatusText');
+              if (badge) badge.textContent = '本地与多标签通道就绪';
+            });
+          } catch (e) {
+            // fallback to BroadcastChannel
+          }
+        }
+      }
+
+      function subscribeCurrentRoom() {
+        if (mqttClient && mqttClient.connected) {
+          mqttClient.subscribe('uci_har_knn/room/' + state.room);
+        }
+      }
+
+      function broadcastSensorPacket(packet) {
+        if (broadcastChannel) {
+          try {
+            broadcastChannel.postMessage(packet);
+          } catch (e) {}
+        }
+        if (mqttClient && mqttClient.connected) {
+          try {
+            mqttClient.publish('uci_har_knn/room/' + packet.room, JSON.stringify(packet));
+          } catch (e) {}
+        }
+        // 同时更新本页大屏状态
+        if (packet.room === state.room) {
+          handleIncomingSensorPacket(packet);
+        }
+      }
+
+      function handleIncomingSensorPacket(packet) {
+        const existing = state.participants.get(packet.id);
+        const history = existing ? existing.waveformHistory : new Array(36).fill(9.8);
+        history.push(packet.svm);
+        if (history.length > 36) history.shift();
+
+        const classification = classifyKNN(packet.features, state.kValue, state.scaleMode);
+
+        const updated = {
+          id: packet.id,
+          name: packet.name,
+          sourceType: packet.sourceType || '真机扫码',
+          isSimulated: !!packet.isSimulated,
+          simTargetActivity: packet.simTargetActivity || 'WALKING',
+          acc: packet.acc,
+          gyr: packet.gyr,
+          svm: packet.svm,
+          features: packet.features,
+          waveformHistory: history,
+          classification,
+          lastSeen: Date.now()
+        };
+
+        const wasFall = existing && existing.classification.predicted === 'FALL';
+        state.participants.set(packet.id, updated);
+
+        if (classification.predicted === 'FALL' && !wasFall) {
+          triggerFallBanner(updated.name);
+        }
+      }
+
+      function triggerFallBanner(userName) {
+        const banner = document.getElementById('fallAlertBanner');
+        const detail = document.getElementById('fallAlertDetail');
+        if (banner && detail) {
+          detail.textContent = `检测到【${userName}】出现异常高冲击加速度峰值与姿态倾角突变，k-NN 判定为疑似跌倒，请及时核实！`;
+          banner.classList.remove('hidden');
+        }
+        playFallAlertBeep();
+      }
+
+      // ==================== 7. 虚拟测试者生成器（支持任意人数动态增删） ====================
+      let simCounter = 1;
+      const SIM_NAMES = [
+        '测试员-张伟', '测试员-李娜', '测试员-王强', '测试员-陈静',
+        '测试员-刘洋', '测试员-赵敏', '测试员-黄磊', '测试员-周婷',
+        '测试员-吴昊', '测试员-郑洁', '测试员-孙宇', '测试员-林峰'
+      ];
+      const INITIAL_ACTIVITIES = ['WALKING', 'UPSTAIRS', 'SITTING', 'STANDING', 'DOWNSTAIRS', 'LAYING'];
+
+      function addSimulatedParticipant(customAct) {
+        const idx = simCounter++;
+        const id = 'sim-user-' + idx + '-' + Date.now().toString(36);
+        const baseName = SIM_NAMES[(idx - 1) % SIM_NAMES.length] + ' #' + String(idx).padStart(2, '0');
+        const targetAct = customAct || INITIAL_ACTIVITIES[(idx - 1) % INITIAL_ACTIVITIES.length];
+
+        const packet = generateSimulatedSensorPacket(id, baseName, targetAct, 0);
+        handleIncomingSensorPacket(packet);
+        renderDashboard();
+      }
+
+      function generateSimulatedSensorPacket(id, name, activityKey, tick) {
+        const center = PROTOTYPE_CENTERS[activityKey] || PROTOTYPE_CENTERS.WALKING;
+        const spread = PROTOTYPE_SPREAD[activityKey] || PROTOTYPE_SPREAD.WALKING;
+
+        // 构造逼真的三轴加速度与角速度瞬时读数
+        const phase = tick * 0.35 + id.charCodeAt(id.length - 1);
+        let ax = 0, ay = 9.8, az = 0;
+        let gx = 0, gy = 0, gz = 0;
+
+        if (activityKey === 'WALKING') {
+          ax = Math.sin(phase) * 2.6 + (Math.random() - 0.5) * 0.5;
+          ay = 9.8 + Math.cos(phase * 2) * 3.2 + (Math.random() - 0.5) * 0.6;
+          az = Math.sin(phase * 0.5) * 1.5;
+          gx = Math.cos(phase) * 18;
+          gy = Math.sin(phase) * 14;
+          gz = Math.cos(phase * 1.5) * 10;
+        } else if (activityKey === 'UPSTAIRS') {
+          ax = Math.sin(phase) * 3.1 + (Math.random() - 0.5) * 0.7;
+          ay = 10.2 + Math.sin(phase * 1.8) * 4.2;
+          az = 2.4 + Math.cos(phase) * 1.9;
+          gx = Math.sin(phase) * 24;
+          gy = Math.cos(phase) * 19;
+          gz = Math.sin(phase * 0.8) * 15;
+        } else if (activityKey === 'DOWNSTAIRS') {
+          ax = Math.cos(phase) * 3.8 + (Math.random() - 0.5) * 0.9;
+          ay = 10.6 + Math.sin(phase * 2.2) * 5.4;
+          az = -2.2 + Math.sin(phase) * 2.3;
+          gx = Math.cos(phase) * 29;
+          gy = Math.sin(phase * 1.3) * 25;
+          gz = Math.cos(phase) * 18;
+        } else if (activityKey === 'SITTING') {
+          ax = 0.2 + (Math.random() - 0.5) * 0.15;
+          ay = 8.1 + (Math.random() - 0.5) * 0.15;
+          az = 5.4 + (Math.random() - 0.5) * 0.15;
+          gx = (Math.random() - 0.5) * 2.2;
+          gy = (Math.random() - 0.5) * 2.0;
+          gz = (Math.random() - 0.5) * 1.5;
+        } else if (activityKey === 'STANDING') {
+          ax = 0.1 + (Math.random() - 0.5) * 0.12;
+          ay = 9.75 + (Math.random() - 0.5) * 0.12;
+          az = 1.1 + (Math.random() - 0.5) * 0.12;
+          gx = (Math.random() - 0.5) * 1.6;
+          gy = (Math.random() - 0.5) * 1.6;
+          gz = (Math.random() - 0.5) * 1.2;
+        } else if (activityKey === 'LAYING') {
+          ax = 9.4 + (Math.random() - 0.5) * 0.1;
+          ay = 1.2 + (Math.random() - 0.5) * 0.1;
+          az = 2.3 + (Math.random() - 0.5) * 0.1;
+          gx = (Math.random() - 0.5) * 1.2;
+          gy = (Math.random() - 0.5) * 1.0;
+          gz = (Math.random() - 0.5) * 1.0;
+        } else if (activityKey === 'FALL') {
+          ax = 12.5 + (Math.random() - 0.5) * 5.0;
+          ay = 16.8 + (Math.random() - 0.5) * 6.5;
+          az = 11.2 + (Math.random() - 0.5) * 4.5;
+          gx = 42 + (Math.random() - 0.5) * 18;
+          gy = -38 + (Math.random() - 0.5) * 16;
+          gz = 31 + (Math.random() - 0.5) * 15;
+        }
+
+        const svm = Math.sqrt(ax * ax + ay * ay + az * az);
+        const features = center.map((c, idx) => {
+          const jitter = (Math.random() - 0.5) * 1.3 * spread[idx];
+          return Math.max(0.02, c + jitter);
+        });
+
+        return {
+          room: state.room,
+          id,
+          name,
+          sourceType: '多端模拟器',
+          isSimulated: true,
+          simTargetActivity: activityKey,
+          acc: { x: ax, y: ay, z: az },
+          gyr: { x: gx, y: gy, z: gz },
+          svm,
+          features
+        };
+      }
+
+      // ==================== 8. 手机端真机传感器监听 (DeviceMotion & DeviceOrientation) ====================
+      function enableHardwareSensors() {
+        const statusEl = document.getElementById('clientSensorStatus');
+        const btn = document.getElementById('startHardwareSensorBtn');
+
+        function bindEvents() {
+          window.addEventListener('devicemotion', (ev) => {
+            const acc = ev.accelerationIncludingGravity || ev.acceleration;
+            const rot = ev.rotationRate;
+            if (acc && (acc.x !== null || acc.y !== null)) {
+              state.client.hardwareActive = true;
+              state.client.acc = {
+                x: Number(acc.x || 0),
+                y: Number(acc.y || 0),
+                z: Number(acc.z || 0)
+              };
+            }
+            if (rot && (rot.alpha !== null || rot.beta !== null)) {
+              state.client.gyr = {
+                x: Number(rot.beta || 0),
+                y: Number(rot.gamma || 0),
+                z: Number(rot.alpha || 0)
+              };
+            }
+          });
+
+          window.addEventListener('deviceorientation', (ev) => {
+            if (ev.beta !== null || ev.gamma !== null) {
+              const beta = Number(ev.beta || 0);
+              const gamma = Number(ev.gamma || 0);
+              // 计算设备相对于竖直重力方向的倾角 (0°=竖直站立, ~90°=平躺)
+              const tilt = Math.min(90, Math.max(0, Math.abs(90 - Math.abs(beta)) * 0.7 + Math.abs(gamma) * 0.3));
+              state.client.tilt = tilt;
+            }
+          });
+
+          if (statusEl) {
+            statusEl.textContent = '实时上报中 (已绑定传感器监听)';
+            statusEl.className = 'text-xs font-semibold text-emerald-400';
+          }
+          if (btn) {
+            btn.textContent = '传感器实时同步进行中 (50Hz 窗口采样)';
+            btn.className = 'w-full py-3 rounded-xl bg-emerald-600 text-white font-bold text-sm shadow-lg transition';
+          }
+        }
+
+        // iOS 13+ 权限申请兼容
+        if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+          DeviceMotionEvent.requestPermission()
+            .then((permissionState) => {
+              if (permissionState === 'granted') {
+                bindEvents();
+              } else if (statusEl) {
+                statusEl.textContent = '传感器权限被拒绝，已启用手动动作模拟器';
+              }
+            })
+            .catch(() => {
+              bindEvents();
+            });
+        } else {
+          bindEvents();
+        }
+      }
+
+      // ==================== 9. 波形图绘制 (Canvas 实时三轴合加速度曲线) ====================
+      function drawWaveformCanvas(canvasEl, history, colorHex) {
+        if (!canvasEl) return;
+        const ctx = canvasEl.getContext('2d');
+        const width = canvasEl.width;
+        const height = canvasEl.height;
+        ctx.clearRect(0, 0, width, height);
+
+        // 基准参考线 (1g = 9.8m/s²)
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.16)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        const refY = height - ((9.8 - 6) / 22) * height;
+        ctx.moveTo(0, refY);
+        ctx.lineTo(width, refY);
+        ctx.stroke();
+
+        if (!history || history.length < 2) return;
+
+        ctx.strokeStyle = colorHex || '#6366f1';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+
+        const step = width / (history.length - 1);
+        history.forEach((val, idx) => {
+          const clamped = Math.max(5, Math.min(28, val));
+          const x = idx * step;
+          const y = height - ((clamped - 5) / 23) * (height - 8) - 4;
+          if (idx === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      }
+
+      // ==================== 10. 渲染监控大屏 (动态适配任意人数) ====================
+      function renderDashboard() {
+        const allParticipants = Array.from(state.participants.values());
+        const total = allParticipants.length;
+
+        // 统计计数
+        const counts = {
+          WALKING: 0,
+          UPSTAIRS: 0,
+          DOWNSTAIRS: 0,
+          SITTING: 0,
+          STANDING: 0,
+          LAYING: 0,
+          FALL: 0
+        };
+        let realCount = 0;
+        let simCount = 0;
+
+        allParticipants.forEach((p) => {
+          const pred = p.classification.predicted;
+          if (counts[pred] !== undefined) counts[pred]++;
+          if (p.isSimulated) simCount++;
+          else realCount++;
+        });
+
+        const dynamicCount = counts.WALKING + counts.UPSTAIRS + counts.DOWNSTAIRS;
+        const staticCount = counts.SITTING + counts.STANDING + counts.LAYING;
+
+        document.getElementById('statTotalUsers').textContent = String(total);
+        document.getElementById('statDeviceBreakdown').textContent = `扫码/本机 ${realCount} · 模拟终端 ${simCount}`;
+        document.getElementById('statDynamicUsers').textContent = String(dynamicCount);
+        document.getElementById('statStaticUsers').textContent = String(staticCount);
+        document.getElementById('statFallUsers').textContent = String(counts.FALL);
+        document.getElementById('participantCountLabel').textContent = `(共 ${total} 人实时同步中)`;
+        document.getElementById('matrixBadgeCount').textContent = `${total} 人在线`;
+
+        Object.keys(counts).forEach((k) => {
+          const el = document.getElementById('count' + k);
+          if (el) el.textContent = String(counts[k]);
+        });
+
+        // 渲染顶部动作比例条
+        const distBar = document.getElementById('distributionBar');
+        if (distBar) {
+          if (total === 0) {
+            distBar.innerHTML = '<div class="h-full bg-slate-800 w-full"></div>';
+          } else {
+            distBar.innerHTML = Object.keys(counts)
+              .filter((k) => counts[k] > 0)
+              .map((k) => {
+                const pct = ((counts[k] / total) * 100).toFixed(1);
+                return `<div class="h-full ${ACTIVITY_META[k].barCls} transition-all duration-300" style="width:${pct}%" title="${ACTIVITY_META[k].label}: ${counts[k]}人"></div>`;
+              })
+              .join('');
+          }
+        }
+
+        // 过滤显示列表
+        const filtered = allParticipants.filter((p) => {
+          if (state.filterCategory === 'ALL') return true;
+          const cat = ACTIVITY_META[p.classification.predicted].category;
+          return cat === state.filterCategory;
+        });
+
+        const emptyState = document.getElementById('emptyParticipantsState');
+        const grid = document.getElementById('participantsGrid');
+
+        if (total === 0) {
+          emptyState.classList.remove('hidden');
+          grid.innerHTML = '';
+          return;
+        } else {
+          emptyState.classList.add('hidden');
+        }
+
+        // 确保每个测试者都有对应的 DOM 卡片（避免全量重绘导致闪烁，按需创建并实时更新）
+        const activeIds = new Set(filtered.map((p) => p.id));
+        Array.from(grid.children).forEach((cardEl) => {
+          if (!activeIds.has(cardEl.dataset.pid)) {
+            cardEl.remove();
+          }
+        });
+
+        filtered.forEach((p) => {
+          let card = grid.querySelector(`[data-pid="${p.id}"]`);
+          const meta = ACTIVITY_META[p.classification.predicted] || ACTIVITY_META.WALKING;
+          const isFall = p.classification.predicted === 'FALL';
+
+          if (!card) {
+            card = document.createElement('div');
+            card.dataset.pid = p.id;
+            card.className = 'bg-slate-900/95 border border-slate-800 rounded-2xl p-4 shadow-lg flex flex-col justify-between transition-all duration-200';
+            card.innerHTML = `
+              <div>
+                <!-- 卡片头部：姓名、设备来源与移除按钮 -->
+                <div class="flex items-center justify-between gap-2 pb-3 border-b border-slate-800/90">
+                  <div class="flex items-center gap-2.5 min-w-0">
+                    <div class="w-9 h-9 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-base shrink-0 pid-icon"></div>
+                    <div class="min-w-0">
+                      <div class="flex items-center gap-1.5">
+                        <h4 class="text-sm font-bold text-white truncate pid-name"></h4>
+                        <span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-300 border border-slate-700 shrink-0 pid-source"></span>
+                      </div>
+                      <div class="text-[11px] text-slate-400 flex items-center gap-1.5 mt-0.5">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                        <span class="mono pid-dist"></span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-1 shrink-0">
+                    <button type="button" data-action="inspect" data-pid="${p.id}" class="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] text-indigo-300 border border-slate-700 transition" title="查看 k-NN 投票详情">
+                      投票详情
+                    </button>
+                    <button type="button" data-action="remove" data-pid="${p.id}" class="p-1 rounded-lg bg-slate-800 hover:bg-red-500/20 text-slate-400 hover:text-red-300 border border-slate-700 transition" title="移除该测试者">
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                <!-- 识别结果徽章与投票置信度 -->
+                <div class="my-3 flex items-center justify-between bg-slate-950/80 p-3 rounded-xl border border-slate-800/80">
+                  <div>
+                    <div class="text-[11px] text-slate-400">k-NN 动作识别结果</div>
+                    <div class="text-base font-extrabold mt-0.5 flex items-center gap-1.5 pid-activity-label"></div>
+                  </div>
+                  <div class="text-right">
+                    <span class="inline-block px-2.5 py-1 rounded-lg text-xs font-bold border pid-badge"></span>
+                    <div class="text-[11px] text-slate-400 mt-1 mono pid-confidence"></div>
+                  </div>
+                </div>
+
+                <!-- 三轴加速度与角速度实时数值表 -->
+                <div class="grid grid-cols-2 gap-2 text-[11px] mono mb-3">
+                  <div class="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/70 space-y-1">
+                    <div class="text-slate-400 font-sans font-semibold flex justify-between">
+                      <span>加速度 (m/s²)</span>
+                      <span class="text-cyan-400 pid-svm"></span>
+                    </div>
+                    <div class="flex justify-between"><span>X: <b class="text-slate-200 pid-ax"></b></span><span>Y: <b class="text-slate-200 pid-ay"></b></span></div>
+                    <div class="flex justify-between"><span>Z: <b class="text-slate-200 pid-az"></b></span><span>σ: <b class="text-indigo-300 pid-std"></b></span></div>
+                  </div>
+                  <div class="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/70 space-y-1">
+                    <div class="text-slate-400 font-sans font-semibold flex justify-between">
+                      <span>陀螺仪 (°/s)</span>
+                      <span class="text-indigo-400 pid-tilt"></span>
+                    </div>
+                    <div class="flex justify-between"><span>X: <b class="text-slate-200 pid-gx"></b></span><span>Y: <b class="text-slate-200 pid-gy"></b></span></div>
+                    <div class="flex justify-between"><span>Z: <b class="text-slate-200 pid-gz"></b></span><span>E: <b class="text-amber-300 pid-energy"></b></span></div>
+                  </div>
+                </div>
+
+                <!-- 实时合加速度波形 Canvas -->
+                <div class="bg-slate-950 rounded-xl border border-slate-800/80 p-2 mb-3">
+                  <div class="flex justify-between items-center text-[10px] text-slate-400 mb-1 px-1">
+                    <span>合加速度 |a| 实时滑动窗口波形 (50Hz)</span>
+                    <span class="mono">单位: m/s²</span>
+                  </div>
+                  <canvas width="280" height="54" class="w-full h-[54px] block pid-canvas"></canvas>
+                </div>
+              </div>
+
+              <!-- 底部动作模拟切换器（方便演示单人动作变化） -->
+              <div class="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-1">
+                <span class="text-[10px] text-slate-400">切换动作:</span>
+                <div class="flex flex-wrap gap-1">
+                  <button type="button" data-action="set-act" data-pid="${p.id}" data-act="WALKING" class="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">行走</button>
+                  <button type="button" data-action="set-act" data-pid="${p.id}" data-act="UPSTAIRS" class="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">上楼</button>
+                  <button type="button" data-action="set-act" data-pid="${p.id}" data-act="DOWNSTAIRS" class="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">下楼</button>
+                  <button type="button" data-action="set-act" data-pid="${p.id}" data-act="SITTING" class="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">坐</button>
+                  <button type="button" data-action="set-act" data-pid="${p.id}" data-act="STANDING" class="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">站</button>
+                  <button type="button" data-action="set-act" data-pid="${p.id}" data-act="LAYING" class="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">躺</button>
+                  <button type="button" data-action="set-act" data-pid="${p.id}" data-act="FALL" class="px-1.5 py-0.5 rounded text-[10px] bg-red-950/90 hover:bg-red-600 text-red-300 hover:text-white border border-red-500/40 font-semibold">跌倒</button>
+                </div>
+              </div>
+            `;
+            grid.appendChild(card);
+          }
+
+          // 更新卡片样式与实时数值
+          card.classList.toggle('fall-alert-card', isFall);
+          card.querySelector('.pid-icon').textContent = meta.icon;
+          card.querySelector('.pid-name').textContent = p.name;
+          card.querySelector('.pid-source').textContent = p.sourceType;
+          card.querySelector('.pid-dist').textContent = `最近邻距离 d=${p.classification.nearestDist.toFixed(2)}`;
+
+          const actLabelEl = card.querySelector('.pid-activity-label');
+          actLabelEl.textContent = `${meta.label} (${meta.en})`;
+          actLabelEl.style.color = meta.colorHex;
+
+          const badgeEl = card.querySelector('.pid-badge');
+          badgeEl.textContent = meta.label;
+          badgeEl.className = `inline-block px-2.5 py-1 rounded-lg text-xs font-bold border pid-badge ${meta.badgeCls}`;
+
+          card.querySelector('.pid-confidence').textContent = `k=${state.kValue} 投票率 ${p.classification.confidence}%`;
+          card.querySelector('.pid-svm').textContent = `|a|=${p.svm.toFixed(1)}`;
+          card.querySelector('.pid-ax').textContent = p.acc.x.toFixed(2);
+          card.querySelector('.pid-ay').textContent = p.acc.y.toFixed(2);
+          card.querySelector('.pid-az').textContent = p.acc.z.toFixed(2);
+          card.querySelector('.pid-std').textContent = p.features[1].toFixed(2);
+
+          card.querySelector('.pid-tilt').textContent = `倾角 ${p.features[2].toFixed(0)}°`;
+          card.querySelector('.pid-gx').textContent = p.gyr.x.toFixed(1);
+          card.querySelector('.pid-gy').textContent = p.gyr.y.toFixed(1);
+          card.querySelector('.pid-gz').textContent = p.gyr.z.toFixed(1);
+          card.querySelector('.pid-energy').textContent = p.features[3].toFixed(0);
+
+          // 高亮当前预设按钮
+          card.querySelectorAll('[data-action="set-act"]').forEach((btn) => {
+            const active = btn.dataset.act === p.simTargetActivity;
+            if (btn.dataset.act === 'FALL') {
+              btn.className = active
+                ? 'px-1.5 py-0.5 rounded text-[10px] bg-red-600 text-white border border-red-400 font-bold'
+                : 'px-1.5 py-0.5 rounded text-[10px] bg-red-950/90 hover:bg-red-600 text-red-300 hover:text-white border border-red-500/40 font-semibold';
+            } else {
+              btn.className = active
+                ? 'px-1.5 py-0.5 rounded text-[10px] bg-indigo-600 text-white border border-indigo-400 font-semibold'
+                : 'px-1.5 py-0.5 rounded text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700';
+            }
+          });
+
+          const canvasEl = card.querySelector('.pid-canvas');
+          drawWaveformCanvas(canvasEl, p.waveformHistory, meta.colorHex);
+        });
+
+        if (state.selectedModalUserId) {
+          renderDetailModalContent(state.selectedModalUserId);
+        }
+      }
+
+      // ==================== 11. 渲染 k-NN 投票详情模态框 ====================
+      function renderDetailModalContent(userId) {
+        const p = state.participants.get(userId);
+        const modal = document.getElementById('detailModal');
+        const body = document.getElementById('modalBodyContent');
+        if (!p || !modal || !body) return;
+
+        document.getElementById('modalUserName').textContent = `${p.name} — k-NN 实时距离计算与投票剖析`;
+        document.getElementById('modalUserSub').textContent = `当前缩放模式: ${state.scaleMode.toUpperCase()} · 近邻数 k = ${state.kValue} · 最近邻欧氏距离 d = ${p.classification.nearestDist.toFixed(3)}`;
+
+        const voteRows = Object.keys(ACTIVITY_META).map((actKey) => {
+          const count = p.classification.votes[actKey] || 0;
+          const pct = Math.round((count / state.kValue) * 100);
+          const meta = ACTIVITY_META[actKey];
+          return `
+            <div class="space-y-1">
+              <div class="flex justify-between text-xs">
+                <span class="font-medium text-slate-200">${meta.icon} ${meta.label} (${meta.en})</span>
+                <span class="mono text-slate-300">${count} / ${state.kValue} 票 (${pct}%)</span>
+              </div>
+              <div class="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                <div class="h-full ${meta.barCls}" style="width: ${pct}%"></div>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        const featureRows = FEATURE_NAMES.map((fname, idx) => {
+          const rawVal = p.features[idx].toFixed(2);
+          const scaledVal = p.classification.scaledInput[idx].toFixed(3);
+          return `
+            <tr class="border-b border-slate-800/80">
+              <td class="py-1.5 text-slate-300">${fname}</td>
+              <td class="py-1.5 text-right mono text-amber-300">${rawVal}</td>
+              <td class="py-1.5 text-right mono text-cyan-300">${scaledVal}</td>
+            </tr>
+          `;
+        }).join('');
+
+        body.innerHTML = `
+          <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
+            <div class="font-semibold text-slate-200">1. k=${state.kValue} 最近邻多数投票分布</div>
+            <div class="space-y-2">${voteRows}</div>
+          </div>
+          <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
+            <div class="font-semibold text-slate-200">2. 传感器特征向量缩放前后对比 (防止大数值特征主导距离)</div>
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="border-b border-slate-700 text-slate-400">
+                  <th class="py-1">特征名称</th>
+                  <th class="py-1 text-right">原始测量值</th>
+                  <th class="py-1 text-right">缩放后参与距离值</th>
+                </tr>
+              </thead>
+              <tbody>${featureRows}</tbody>
+            </table>
+          </div>
+        `;
+      }
+
+      // ==================== 12. 手机采集端实时循环与 UI 更新 ====================
+      let tickCounter = 0;
+      function stepSimulationAndClientLoop() {
+        tickCounter++;
+
+        // 1) 更新所有模拟测试者的数据
+        state.participants.forEach((p) => {
+          if (p.isSimulated) {
+            const pkt = generateSimulatedSensorPacket(p.id, p.name, p.simTargetActivity, tickCounter);
+            handleIncomingSensorPacket(pkt);
+          }
+        });
+
+        // 2) 如果当前处于手机采集端视图，或用户已启动本机传感器，则持续上报本机测试员数据
+        if (state.viewMode === 'client' || state.client.hardwareActive) {
+          const nameInput = document.getElementById('clientNameInput');
+          const roomInput = document.getElementById('clientRoomInput');
+          if (nameInput && nameInput.value.trim()) state.client.name = nameInput.value.trim();
+          if (roomInput && roomInput.value.trim() && roomInput.value.trim() !== state.room) {
+            state.room = roomInput.value.trim();
+            subscribeCurrentRoom();
+            renderQRCode();
+          }
+
+          let packet;
+          if (state.client.hardwareActive) {
+            // 使用真实手机加速度与陀螺仪计算 5 维特征
+            const { x: ax, y: ay, z: az } = state.client.acc;
+            const { x: gx, y: gy, z: gz } = state.client.gyr;
+            const svm = Math.sqrt(ax * ax + ay * ay + az * az);
+            state.client.svmHistory.push(svm);
+            if (state.client.svmHistory.length > 20) state.client.svmHistory.shift();
+
+            const meanSvm = state.client.svmHistory.reduce((a, b) => a + b, 0) / state.client.svmHistory.length;
+            const varianceSvm = state.client.svmHistory.reduce((a, v) => a + Math.pow(v - meanSvm, 2), 0) / state.client.svmHistory.length;
+            const stdSvm = Math.sqrt(varianceSvm);
+            const gyroEnergy = gx * gx + gy * gy + gz * gz;
+            const jerk = Math.abs(svm - (state.client.svmHistory[state.client.svmHistory.length - 2] || svm)) * 4.5;
+
+            packet = {
+              room: state.room,
+              id: state.client.id,
+              name: state.client.name,
+              sourceType: '手机真机传感器',
+              isSimulated: false,
+              simTargetActivity: state.client.simTargetActivity,
+              acc: { x: ax, y: ay, z: az },
+              gyr: { x: gx, y: gy, z: gz },
+              svm,
+              features: [meanSvm, Math.max(0.08, stdSvm), state.client.tilt, Math.max(1, gyroEnergy), Math.max(0.2, jerk)]
+            };
+          } else {
+            // 使用手机端所选预设动作生成传感器信号并上报
+            packet = generateSimulatedSensorPacket(
+              state.client.id,
+              state.client.name,
+              state.client.simTargetActivity,
+              tickCounter
+            );
+            packet.sourceType = '扫码终端';
+            packet.isSimulated = false;
+          }
+
+          broadcastSensorPacket(packet);
+          updateClientUI(packet);
+        }
+
+        renderDashboard();
+      }
+
+      function updateClientUI(packet) {
+        const res = classifyKNN(packet.features, state.kValue, state.scaleMode);
+        const meta = ACTIVITY_META[res.predicted] || ACTIVITY_META.STANDING;
+
+        const actEl = document.getElementById('clientCurrentActivity');
+        if (actEl) {
+          actEl.textContent = `${meta.icon} ${meta.label} (${meta.en})`;
+          actEl.style.color = meta.colorHex;
+        }
+        document.getElementById('clientConfidence').textContent = `${res.confidence}%`;
+        document.getElementById('clientSvmValue').textContent = `${packet.svm.toFixed(2)} m/s²`;
+        document.getElementById('clientTiltValue').textContent = `${packet.features[2].toFixed(0)}°`;
+
+        document.getElementById('clientAccX').textContent = packet.acc.x.toFixed(2);
+        document.getElementById('clientAccY').textContent = packet.acc.y.toFixed(2);
+        document.getElementById('clientAccZ').textContent = packet.acc.z.toFixed(2);
+
+        document.getElementById('clientGyrX').textContent = packet.gyr.x.toFixed(1);
+        document.getElementById('clientGyrY').textContent = packet.gyr.y.toFixed(1);
+        document.getElementById('clientGyrZ').textContent = packet.gyr.z.toFixed(1);
+      }
+
+      // ==================== 13. 视图切换与事件绑定 ====================
+      function switchView(mode) {
+        state.viewMode = mode;
+        const dashView = document.getElementById('dashboardView');
+        const clientView = document.getElementById('clientView');
+        const tabDash = document.getElementById('tabDashboardBtn');
+        const tabClient = document.getElementById('tabClientBtn');
+
+        if (mode === 'client') {
+          dashView.classList.add('hidden');
+          clientView.classList.remove('hidden');
+          tabClient.className = 'px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all bg-indigo-600 text-white shadow';
+          tabDash.className = 'px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all text-slate-300 hover:text-white';
+        } else {
+          clientView.classList.add('hidden');
+          dashView.classList.remove('hidden');
+          tabDash.className = 'px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all bg-indigo-600 text-white shadow';
+          tabClient.className = 'px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all text-slate-300 hover:text-white';
+        }
+      }
+
+      function bindUIEvents() {
+        document.getElementById('tabDashboardBtn').addEventListener('click', () => switchView('dashboard'));
+        document.getElementById('tabClientBtn').addEventListener('click', () => switchView('client'));
+        document.getElementById('quickSwitchTesterBtn').addEventListener('click', () => switchView('client'));
+        document.getElementById('backToDashboardBtn').addEventListener('click', () => switchView('dashboard'));
+        document.getElementById('emptyOpenClientBtn').addEventListener('click', () => switchView('client'));
+
+        // 声音开关
+        document.getElementById('soundToggleBtn').addEventListener('click', () => {
+          state.soundEnabled = !state.soundEnabled;
+          document.getElementById('soundIconOn').classList.toggle('hidden', !state.soundEnabled);
+          document.getElementById('soundIconOff').classList.toggle('hidden', state.soundEnabled);
+        });
+
+        // 更换房间号
+        document.getElementById('newRoomBtn').addEventListener('click', () => {
+          state.room = 'HAR-' + Math.floor(1000 + Math.random() * 9000);
+          subscribeCurrentRoom();
+          renderQRCode();
+        });
+
+        // 自定义 URL 变化时实时刷新二维码
+        document.getElementById('customUrlInput').addEventListener('input', () => {
+          renderQRCode();
+        });
+
+        // 复制扫码链接
+        document.getElementById('copyUrlBtn').addEventListener('click', () => {
+          const url = getTesterShareUrl();
+          const btn = document.getElementById('copyUrlBtn');
+          if (!url) {
+            btn.textContent = '请先填网址';
+            setTimeout(() => { btn.textContent = '复制'; }, 1500);
+            return;
+          }
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).catch(() => {});
+          } else {
+            const temp = document.createElement('input');
+            temp.value = url;
+            document.body.appendChild(temp);
+            temp.select();
+            document.execCommand('copy');
+            temp.remove();
+          }
+          btn.textContent = '已复制';
+          setTimeout(() => { btn.textContent = '复制'; }, 1500);
+        });
+
+        // 下载完整单文件 HTML
+        document.getElementById('downloadHtmlBtn').addEventListener('click', () => {
+          const docHtml = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+          const blob = new Blob([docHtml], { type: 'text/html;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'har_knn_monitor.html';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        });
+
+        // 部署指引弹窗
+        const closeGuide = () => document.getElementById('deployGuideModal').classList.add('hidden');
+        document.getElementById('openDeployGuideBtn').addEventListener('click', () => {
+          document.getElementById('deployGuideModal').classList.remove('hidden');
+        });
+        document.getElementById('closeDeployGuideBtn').addEventListener('click', closeGuide);
+        document.getElementById('closeDeployGuideFooterBtn').addEventListener('click', closeGuide);
+
+        // 新增与清空模拟测试者
+        document.getElementById('addSimUserBtn').addEventListener('click', () => {
+          addSimulatedParticipant();
+        });
+        document.getElementById('addBatchSimBtn').addEventListener('click', () => {
+          ['WALKING', 'UPSTAIRS', 'SITTING', 'DOWNSTAIRS'].forEach((act) => addSimulatedParticipant(act));
+        });
+        document.getElementById('emptyAddSimBtn').addEventListener('click', () => {
+          ['WALKING', 'STANDING', 'UPSTAIRS'].forEach((act) => addSimulatedParticipant(act));
+        });
+        document.getElementById('clearOfflineBtn').addEventListener('click', () => {
+          state.participants.clear();
+          document.getElementById('fallAlertBanner').classList.add('hidden');
+          renderDashboard();
+        });
+
+        // 告警横幅关闭
+        document.getElementById('dismissAlertBtn').addEventListener('click', () => {
+          document.getElementById('fallAlertBanner').classList.add('hidden');
+          // 将处于 FALL 状态的模拟测试者恢复为 SITTING
+          state.participants.forEach((p) => {
+            if (p.simTargetActivity === 'FALL') p.simTargetActivity = 'SITTING';
+          });
+          if (state.client.simTargetActivity === 'FALL') {
+            state.client.simTargetActivity = 'STANDING';
+          }
+          renderDashboard();
+        });
+
+        // 特征缩放方法切换
+        document.getElementById('scalingSelector').addEventListener('click', (e) => {
+          const btn = e.target.closest('.scale-btn');
+          if (!btn) return;
+          state.scaleMode = btn.dataset.scale;
+          document.querySelectorAll('.scale-btn').forEach((b) => {
+            const active = b.dataset.scale === state.scaleMode;
+            b.className = active
+              ? 'scale-btn px-2.5 py-2 rounded-lg text-xs font-medium bg-indigo-600 text-white border border-indigo-500 transition'
+              : 'scale-btn px-2.5 py-2 rounded-lg text-xs font-medium bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition';
+          });
+
+          const hints = {
+            zscore: '当前：X_new = (X - μ) / σ，对异常离群峰值相对稳健，各维特征均等参与欧氏距离计算。',
+            minmax: '当前：X_new = (X - min) / (max - min)，所有特征压缩至 [0,1] 区间，受极端值影响较大。',
+            none: '警告：当前未做任何特征缩放！角速度能量(0~1800)与倾角(0~90)主导欧氏距离，小范围特征被淹没。'
+          };
+          document.getElementById('scalingHint').textContent = hints[state.scaleMode];
+          stepSimulationAndClientLoop();
+        });
+
+        // k 值切换
+        document.getElementById('kSelector').addEventListener('click', (e) => {
+          const btn = e.target.closest('.k-btn');
+          if (!btn) return;
+          state.kValue = Number(btn.dataset.k);
+          document.getElementById('kValueBadge').textContent = `k = ${state.kValue}`;
+          document.querySelectorAll('.k-btn').forEach((b) => {
+            const active = Number(b.dataset.k) === state.kValue;
+            b.className = active
+              ? 'k-btn py-1.5 rounded-lg text-xs mono bg-indigo-600 text-white border border-indigo-500 font-bold'
+              : 'k-btn py-1.5 rounded-lg text-xs mono bg-slate-800 text-slate-300 border border-slate-700 hover:text-white';
+          });
+          stepSimulationAndClientLoop();
+        });
+
+        // 筛选器
+        document.getElementById('filterActivitySelect').addEventListener('change', (e) => {
+          state.filterCategory = e.target.value;
+          renderDashboard();
+        });
+
+        // 卡片矩阵事件委托（切换单人动作、查看详情、移除测试者）
+        document.getElementById('participantsGrid').addEventListener('click', (e) => {
+          const btn = e.target.closest('button[data-action]');
+          if (!btn) return;
+          const action = btn.dataset.action;
+          const pid = btn.dataset.pid;
+          const p = state.participants.get(pid);
+          if (!p) return;
+
+          if (action === 'remove') {
+            state.participants.delete(pid);
+            renderDashboard();
+          } else if (action === 'inspect') {
+            state.selectedModalUserId = pid;
+            renderDetailModalContent(pid);
+            document.getElementById('detailModal').classList.remove('hidden');
+          } else if (action === 'set-act') {
+            const newAct = btn.dataset.act;
+            p.simTargetActivity = newAct;
+            if (pid === state.client.id) {
+              state.client.simTargetActivity = newAct;
+            }
+            const pkt = generateSimulatedSensorPacket(p.id, p.name, newAct, tickCounter);
+            pkt.sourceType = p.sourceType;
+            pkt.isSimulated = p.isSimulated;
+            handleIncomingSensorPacket(pkt);
+            renderDashboard();
+          }
+        });
+
+        // 模态框关闭
+        const closeModal = () => {
+          state.selectedModalUserId = null;
+          document.getElementById('detailModal').classList.add('hidden');
+        };
+        document.getElementById('closeModalBtn').addEventListener('click', closeModal);
+        document.getElementById('closeModalFooterBtn').addEventListener('click', closeModal);
+
+        // 手机端：开启硬件传感器
+        document.getElementById('startHardwareSensorBtn').addEventListener('click', () => {
+          enableHardwareSensors();
+        });
+
+        // 手机端：预设动作按钮切换
+        document.getElementById('clientPresetButtons').addEventListener('click', (e) => {
+          const btn = e.target.closest('.client-act-btn');
+          if (!btn) return;
+          state.client.hardwareActive = false;
+          state.client.simTargetActivity = btn.dataset.act;
+          document.querySelectorAll('.client-act-btn').forEach((b) => {
+            const active = b.dataset.act === state.client.simTargetActivity;
+            b.className = active
+              ? 'client-act-btn py-2 px-2.5 rounded-xl text-xs font-semibold bg-indigo-600 text-white border border-indigo-500 transition'
+              : 'client-act-btn py-2 px-2.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition';
+          });
+          stepSimulationAndClientLoop();
+        });
+
+        // 手机端：触发突发跌倒
+        document.getElementById('clientTriggerFallBtn').addEventListener('click', () => {
+          state.client.hardwareActive = false;
+          state.client.simTargetActivity = 'FALL';
+          stepSimulationAndClientLoop();
+        });
+      }
+
+      // ==================== 14. 初始化启动 ====================
+      window.addEventListener('DOMContentLoaded', () => {
+        bindUIEvents();
+        renderQRCode();
+        setupRealtimeChannels();
+        switchView(state.viewMode);
+
+        // 默认初始化 3 名不同动作状态的测试者，直观展示多人实时监测效果
+        addSimulatedParticipant('WALKING');
+        addSimulatedParticipant('SITTING');
+        addSimulatedParticipant('UPSTAIRS');
+
+        // 每 350ms 刷新一次传感器窗口采样与波形
+        setInterval(stepSimulationAndClientLoop, 350);
+      });
+    })();
+  </script>
+</body>
+</html>
